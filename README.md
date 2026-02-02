@@ -7,10 +7,17 @@
 
 This repository contains the codebase for fine-tuning, inferring, and evaluating image editing models on the **Amaze Bench**. It supports Supervised Fine-Tuning (SFT) and specialized evaluation metrics for maze-solving tasks.
 
+<div align="center">
+  <img src="assets/circle.jpg" width="24%" alt="Circle Maze" />
+  <img src="assets/hexagon.jpg" width="24%" alt="Hexagon Maze" />
+  <img src="assets/square.jpg" width="24%" alt="Square Maze" />
+  <img src="assets/triangle.jpg" width="24%" alt="Triangle Maze" />
+</div>
+
 ## 🚀 Supported Models
 The framework currently supports the following architectures:
 *   **Bagel**
-*   **Janus**
+*   **Janus-Pro-7B**
 *   **Qwen-Image-Edit**
 *   **API-based Models** (via generic API inference)
 
@@ -56,7 +63,7 @@ ds = load_dataset("piekenius123/Amaze")
 
 There are four shapes in total: circle, hexagon, square, triangle. In each shape, `maze_dataset` is the test set and `maze_dataset_train` is the train set. 
 In test set, `*_test.parquet` is the size ranging from 3\*3 to 16\*16. And `*_test_32.parquet` is the size of 32\*32.
- 
+
 
 ## 🏋️ Supervised Fine-Tuning (SFT)
 
