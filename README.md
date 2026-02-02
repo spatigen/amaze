@@ -53,6 +53,11 @@ from datasets import load_dataset
 
 ds = load_dataset("piekenius123/Amaze") 
 ``` 
+
+There are four shapes in total: circle, hexagon, square, triangle. In each shape, `maze_dataset` is the test set and `maze_dataset_train` is the train set. 
+In test set, `*_test.parquet` is the size ranging from 3\*3 to 16\*16. And `*_test_32.parquet` is the size of 32\*32.
+ 
+
 ## 🏋️ Supervised Fine-Tuning (SFT)
 
 You can fine-tune supported models using the scripts provided in the `sft/` directory.
