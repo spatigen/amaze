@@ -2,21 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reward Functions for Maze Generation GRPO Training
+Metrics Functions for Maze Generation 
 
-This module implements three types of reward functions for evaluating maze generation:
+This module implements three types of metrics functions for evaluating maze generation:
 
-原文：
-1. 输入 IA：转化成二进制的original_image IB：m_original_img IC：解空间的白色区域（像素点是1，其他部分都是0），也就是mask_img O：模型输出generated_image
-目标：
-1. 第一个reward：O和IC相乘（也就是mask）提取出O的background，再转成binary，和IA（binary形式）计算l1 loss
-2. 第二个reward：查看IC（解空间）范围内是否存在O的solution path并用二进制表示，判断solution是否合法：1. 是否连通（不和黑色区域交叉） 2. 起点和终点在定义的起点终点白色区域内
-
-修改后的逻辑：
-1. 输入 original_image：转化成二进制的原始图像 marked_original_img：带标记的原始图像 solution_space_mask：解空间的白色区域（像素点是1，其他部分都是0），也就是从数据集的mask_img得到的解空间 generated_image：模型输出的生成图像
-目标：
-1. 第一个reward（背景保持）：使用background_mask（1 - solution_space_mask）提取generated_image和original_image的背景（墙壁）区域，转成binary进行比较，计算l1 loss。确保模型正确保持了墙壁结构。
-2. 第二个reward（路径质量）：查看solution_space_mask（解空间）范围内是否存在generated_image的solution path并用二进制表示，判断solution是否合法：1. 是否连通（不和黑色区域交叉） 2. 起点和终点在定义的起点终点白色区域内
 """
 
 import os
@@ -32,7 +21,6 @@ from skimage.morphology import skeletonize
 
 # 由 infer_bagel 根据 config.is_circle 设置（config/maze.py 或 infer_auto.sh 传入）
 IS_CIRCLE = False
-IS_ISCIRCLE = False  # 与 IS_CIRCLE 同义，两处引用保持一致
 
 def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
     """
@@ -111,50 +99,6 @@ def pil_image_to_tensor(pil_image: Image.Image, target_size: Tuple[int, int] = (
         return torch.zeros(3, target_size[0], target_size[1])
 
 
-def tensor_to_binary_maze(image_tensor: torch.Tensor, threshold: float = 0.5) -> np.ndarray:
-    """
-    Convert image tensor to binary maze representation.
-
-    Args:
-        image_tensor: Image tensor of shape (C, H, W) or (H, W)
-        threshold: Threshold for binarization
-
-    Returns:
-        Binary maze array where 1 = wall, 0 = path
-    """
-    if image_tensor.dim() == 3:
-        # Convert RGB to grayscale
-        gray = 0.299 * image_tensor[0] + 0.587 * image_tensor[1] + 0.114 * image_tensor[2]
-    else:
-        gray = image_tensor
-
-    # Binarize: assuming dark pixels (< threshold) are walls (1), light pixels are paths (0)
-    binary = (gray < threshold).float().numpy()
-    return binary.astype(np.uint8)
-
-
-def extract_white_regions(image_tensor: torch.Tensor, white_threshold: float = 0.8) -> np.ndarray:
-    """
-    Extract white regions (traversable paths) from image tensor.
-
-    Args:
-        image_tensor: Image tensor of shape (C, H, W)
-        white_threshold: Threshold for considering a pixel as white
-
-    Returns:
-        Binary mask where 1 = white region (traversable path), 0 = non-white
-    """
-    if image_tensor.dim() == 3:
-        # Convert RGB to grayscale
-        gray = 0.299 * image_tensor[0] + 0.587 * image_tensor[1] + 0.114 * image_tensor[2]
-    else:
-        gray = image_tensor
-
-    # Extract white regions: pixels with high brightness
-    white_mask = (gray > white_threshold).float().numpy().astype(np.uint8)
-    return white_mask
-
-
 def extract_blue_path(image_tensor: torch.Tensor,
                      blue_hue_range: Tuple[int, int] = (100, 130),
                      saturation_threshold: int = 50,
@@ -172,16 +116,7 @@ def extract_blue_path(image_tensor: torch.Tensor,
         Binary mask where 1 = blue path pixel, 0 = non-blue
     """
     try:
-        # Convert tensor to numpy array (H, W, C)
-#        if image_tensor.device != torch.device('cpu'):
-#            image_array = image_tensor.detach().cpu().numpy()
-#        else:
-#            image_array = image_tensor.numpy()
-#
-#        image_array = image_array.transpose(1, 2, 0)  # CHW -> HWC
-#        image_array = (image_array * 255).astype(np.uint8)  # Convert to 0-255 range
-
-        # Convert RGB to HSV for better color detection
+        
         hsv = cv2.cvtColor(image_tensor, cv2.COLOR_RGB2HSV)
 
         # Create blue mask based on HSV thresholds
@@ -306,13 +241,7 @@ def extract_red_markers(image_tensor: torch.Tensor,
         
         # Debug: 输出红色像素统计
         red_pixel_count = np.sum(red_mask > 0)
-        # if red_pixel_count == 0:
-        #     #print(f"      extract_red_markers调试: 未检测到红色像素")
-        #     #print(f"      HSV范围: H=[{h_values.min()}, {h_values.max()}], S=[{s_values.min()}, {s_values.max()}], V=[{v_values.min()}, {v_values.max()}]")
-        #     #print(f"      红色HSV阈值: H在[{red_hue_ranges[0][0]}-{red_hue_ranges[0][1]}]或[{red_hue_ranges[1][0]}-{red_hue_ranges[1][1]}], S>={saturation_threshold}, V>={value_threshold}")
-        #     #print(f"      RGB图像值范围: R=[{image_array[:,:,0].min()}, {image_array[:,:,0].max()}], G=[{image_array[:,:,1].min()}, {image_array[:,:,1].max()}], B=[{image_array[:,:,2].min()}, {image_array[:,:,2].max()}]")
-        # else:
-            # #print(f"      extract_red_markers: 检测到{red_pixel_count}个红色像素")
+
 
         # Find connected components to identify start and end points
         contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -454,11 +383,10 @@ class MazeRewardFunction:
         Args:
             weights: Weights for different reward components
         """
-        # Default weights for the reward components
+        # Default weights for the reward components（已去除第二个reward路径质量）
         self.weights = weights or {
             # 'image_similarity': 0.4,    # Weight for image similarity reward
             'solution_space': 0.5,           # Weight for solution space reward
-            'path_quality': 0.5,             # Weight for path quality reward
             'gt_cell_coverage': 0.0,         # Weight for GT cell coverage reward (第三个reward)
             'background_violation': 0.0      # Weight for background violation reward (第四个reward)
         }
@@ -545,20 +473,20 @@ class MazeRewardFunction:
                                         reference_solution: Union[str, Image.Image, torch.Tensor],
                                         solution_mask: Union[str, Image.Image, torch.Tensor] = None) -> Tuple[float, float]:
             """
-            第一个reward（修改版）：计算解空间内（Mask=1）和解空间外（Mask=0）的MSE。
+            First metric: Calculate MSE inside and outside the solution space.
 
             Args:
-                generated_image: 模型输出的生成图像 (C, H, W)
-                reference_maze: 原始图像
-                reference_solution: (未使用)
-                solution_mask: 解空间mask PNG（255=解空间，0=其他）HWC
+                generated_image: Generated image (C, H, W)
+                reference_maze: Original image
+                reference_solution: (not used)
+                solution_mask: Solution space mask PNG (255=solution space, 0=other) HWC
 
             Returns:
-                Tuple[float, float]: (mse_inside, mse_outside)
+                Tuple[float, float]: (mse_inside, mse_outside) - MSE inside and outside the solution space
             """
             #print("========")
             if reference_maze is None or solution_mask is None:
-                print("错误: reference_maze和solution_mask都必须提供")
+                print("Error: reference_maze and solution_mask must be provided")
                 return 0.0, 0.0
             
             try:
@@ -588,12 +516,7 @@ class MazeRewardFunction:
                 solution_space_mask = extract_solution_space_from_mask(mask_tensor)
                 solution_space_tensor = torch.from_numpy(solution_space_mask.astype(np.float32)).to(generated_image.device)
                 
-                # 确保mask维度正确 (C, H, W)
-                #if solution_space_tensor.dim() == 2:
-                 #   solution_space_tensor = solution_space_tensor.unsqueeze(0).repeat(generated_image.shape[0], 1, 1)
-                #elif solution_space_tensor.shape[0] == 1:
-                 #   solution_space_tensor = solution_space_tensor.repeat(generated_image.shape[0], 1, 1)
-
+               
                 # 3. 计算均方差 (Squared Difference)
                 gen = generated_image.float()
                 ref = reference_tensor.float()
@@ -627,581 +550,19 @@ class MazeRewardFunction:
                 #traceback.print_exc()
                # return 0.0, 0.0
 
-
-    def compute_path_quality_reward(self, generated_image: torch.Tensor,
-                                  reference_solution: Union[str, Image.Image, torch.Tensor],
-                                  reference_maze: Union[str, Image.Image, torch.Tensor] = None,
-                                  solution_mask: Union[str, Image.Image, torch.Tensor] = None) -> float:
-        """
-        第二个reward：将mask和generated img转成二进制后相乘，在白色区域内处理路径质量。
-
-        Args:
-            generated_image: 模型输出的生成图像 (C, H, W)
-            reference_solution: 参考解图像，用于提取起终点位置
-            reference_maze: 原始图像，用于验证路径不与黑色区域交叉（可选）
-            solution_mask: 解空间mask PNG（255=解空间，0=其他），必须提供
-
-        Returns:
-            Path validity reward (0-1, higher is better)
-        """
-        return 0.0
-        if solution_mask is None:
-            print("错误: solution_mask必须提供")
-            return 0.0
-
-        try:
-            # 1. 转换generated_image为二进制图像
-            generated_tensor_resized = torch.nn.functional.interpolate(
-                generated_image.unsqueeze(0), size=(256, 256), mode='bilinear'
-            ).squeeze(0)
-
-            # 转换为灰度并转成numpy
-            if generated_tensor_resized.shape[0] == 3:  # RGB
-                generated_gray = torch.mean(generated_tensor_resized, dim=0)
-            else:
-                generated_gray = generated_tensor_resized[0]
-
-            # 转换为float32以支持bfloat16等数据类型
-            generated_np = generated_gray.float().cpu().numpy()
-            # 转换为二进制（白色=1，黑色=0）
-            generated_binary = (generated_np > 0.5).astype(np.float32)
-
-            # 2. 转换solution_mask为二进制图像
-            mask_tensor = self._convert_to_tensor(solution_mask, target_size=(256, 256))
-            # 转换为float32以支持bfloat16等数据类型
-            mask_np = mask_tensor.float().cpu().numpy()
-
-            # 如果是多通道，取第一个通道
-            if len(mask_np.shape) == 3:
-                mask_np = mask_np[0]
-            elif len(mask_np.shape) == 2:
-                mask_np = mask_np
-
-            # 转换为二进制（白色=1，黑色=0）
-            mask_binary = (mask_np > 0.5).astype(np.float32)
-
-            # #print(f"第二个reward：将mask和generated_img转成二进制后相乘")
-            # #print(f"第二个reward调试信息:")
-            # #print(f"  generated_image二进制白色像素数: {np.sum(generated_binary)}")
-            # #print(f"  solution_mask二进制白色像素数: {np.sum(mask_binary)}")
-
-            # 3. 二进制相乘：只保留在解空间（白色区域）内的generated图像部分
-            tmp_binary = generated_binary * mask_binary
-            result_binary = (tmp_binary>0.5) ^ (mask_binary>0.5)
-
-            # #print(f"  generated_image和solution_mask相乘后白色像素数: {np.sum(result_binary)}")
-
-            # 4. 转换回图片格式（0或1 -> 0或255）
-            result_img_array = (result_binary * 255).astype(np.uint8)
-            result_img = Image.fromarray(result_img_array)
-
-            # 保存调试图像（基本的二进制处理结果）
-            # try:
-            #     os.makedirs("test_images", exist_ok=True)
-
-            #     # 保存二进制转换结果
-            #     # generated_binary_img = Image.fromarray((generated_binary * 255).astype(np.uint8))
-            #     # generated_binary_img.save("test_images/generated_binary.png")
-
-            #     # mask_binary_img = Image.fromarray((mask_binary * 255).astype(np.uint8))
-            #     # mask_binary_img.save("test_images/mask_binary.png")
-
-            #     result_img.save("test_images/result_binary_multiply.png")
-
-            #     print("已保存二进制处理调试图像:")
-            #     # print("  - test_images/generated_binary.png: generated图像的二进制版本")
-            #     # print("  - test_images/mask_binary.png: mask的二进制版本")
-            #     print("  - test_images/result_binary_multiply.png: 相乘结果")
-
-            # except Exception as e:
-            #     #print(f"保存基本调试图像时出错: {e}")
-
-            # 5. 在白色区域内做处理
-            # 步骤1：提取generated image和reference solution中的起点和终点位置，并检测重合度
-            end_iou = 0
-            try:
-                _, gen_start_mask, gen_end_mask = extract_red_markers(generated_tensor_resized)
-                _, ref_start_mask, ref_end_mask = extract_red_markers(reference_solution)
-
-                # 检查generated image中是否找到起终点
-                if np.sum(gen_start_mask) == 0 or np.sum(gen_end_mask) == 0:
-                    print("  ✗ 未能在generated image中找到起点或终点红色标记；")
-                    # return 0.0
-
-                # 检查reference solution中是否找到起终点
-                if np.sum(ref_start_mask) == 0 or np.sum(ref_end_mask) == 0:
-                    print("  ✗ 未能在reference solution中找到起点或终点红色标记；")
-                    return 0.0
-
-                # 计算起点和终点的重合度（IoU）
-                start_overlap = compute_iou(gen_start_mask, ref_start_mask)
-                end_overlap = compute_iou(gen_end_mask, ref_end_mask)
-
-                # #print(f"  起点重合度: {start_overlap:.4f}, 终点重合度: {end_overlap:.4f}")
-
-                # 设置重合度阈值，如果重合度太低则认为位置不匹配
-                # overlap_threshold = 0.1  # 可以根据需要调整
-                end_iou = start_overlap*0.5+end_overlap*0.5
-                # if start_overlap < overlap_threshold or end_overlap < overlap_threshold:
-                    # #print(f"  ✗ 起终点位置重合度不足（阈值: {overlap_threshold}）")
-                    # return 0.0
-
-            except Exception as e:
-                #print(f"  提取起终点或计算重合度时出错: {e}")
-                return 0.0
-
-            # 步骤2：用BFS判断路径连通性（使用generated image的起终点）
-            connectivity_score = 0.0
-            try:
-                # 首先进行膨胀处理
-                from scipy.ndimage import binary_dilation
-                structure = np.ones((3, 3), dtype=bool)
-                expanded_start_mask = binary_dilation(gen_start_mask.astype(bool), structure=structure, iterations=2).astype(np.float32)
-                expanded_end_mask = binary_dilation(gen_end_mask.astype(bool), structure=structure, iterations=2).astype(np.float32)
-
-                # #print(f"  膨胀处理: 起点{np.sum(gen_start_mask)}→{np.sum(expanded_start_mask)}, 终点{np.sum(gen_end_mask)}→{np.sum(expanded_end_mask)}")
-
-                # # 关键修复：将膨胀后的起终点区域添加到路径中
-                # #print(f"  修复膨胀问题：将膨胀区域添加到实际路径图像中")
-                result_binary_with_expanded = (1-result_binary).copy()
-
-                # 将膨胀后的起终点区域强制设为黑色路径（0值）
-                result_binary_with_expanded[expanded_start_mask > 0] = 0  # 黑色路径
-                result_binary_with_expanded[expanded_end_mask > 0] = 0    # 黑色路径
-
-                # 在result_binary中，白色=1，黑色=0
-                # 我们需要检查黑色路径（0值）的连通性
-                inverted_result = 1-result_binary_with_expanded  # 反转：黑色路径变为1，白色背景变为0
-
-                if np.sum(inverted_result) > 0:  # 如果有黑色路径
-                    # #print(f"  反转后路径像素数: {np.sum(inverted_result)}")
-                    # #print(f"  原始result_binary中白色像素数: {np.sum(result_binary)}")
-                    # #print(f"  原始result_binary中黑色像素数: {np.sum(1 - result_binary)}")
-
-                    # 保存修复后的路径图像
-                    # try:
-                    #     # 保存原始result_binary
-                    #     original_result_img = Image.fromarray((result_binary * 255).astype(np.uint8))
-                    #     original_result_img.save("test_images/original_result_binary.png")
-
-                    #     # 保存修复后的result_binary_with_expanded
-                    #     expanded_result_img = Image.fromarray((result_binary_with_expanded * 255).astype(np.uint8))
-                    #     expanded_result_img.save("test_images/expanded_result_binary.png")
-
-                    #     # 保存反转后用于BFS的图像
-                    #     # inverted_img = Image.fromarray((inverted_result * 255).astype(np.uint8))
-                    #     # inverted_img.save("test_images/inverted_result_for_bfs.png")
-
-                    #     #print(f"    已保存修复后的路径图像:")
-                    #     #print(f"      - test_images/original_result_binary.png: 原始路径")
-                    #     #print(f"      - test_images/expanded_result_binary.png: 添加膨胀后的路径")
-                    #     # #print(f"      - test_images/inverted_result_for_bfs.png: BFS使用的路径图像")
-                    # except Exception as e:
-                    #     #print(f"    保存修复后路径图像失败: {e}")
-
-                    # 转换reference_solution为tensor用于提取起终点
-                    reference_solution_tensor = self._convert_to_tensor(reference_solution, target_size=(256, 256))
-                    if generated_image.device != reference_solution_tensor.device:
-                        reference_solution_tensor = reference_solution_tensor.to(generated_image.device)
-
-                    # 使用新的连通性检查策略：随机点BFS找端点
-                    connectivity_score = self._check_connectivity_with_random_point(
-                        inverted_result, expanded_start_mask, expanded_end_mask, reference_solution_tensor
-                    )
-                    # #print(f"  第二个reward路径连通性分数: {connectivity_score:.4f}")
-
-                    # 如果路径不连通，直接返回0
-                    if connectivity_score == 0.0:
-                        print("  路径不连通")
-                        # return 0.0
-                else:
-                    print("  未发现黑色路径,0")
-                    return 0.0
-
-            except Exception as e:
-                #print(f"  检查连通性时出错: {e}")
-                return 0.0
-
-            # 6. 计算最终reward
-            # 连通性已确认为非0（否则已经返回）
-            final_reward = connectivity_score
-
-            #print(f"  最终第二个reward: {final_reward:.4f}")
-
-            return max(0.0, min(1.0, final_reward))
-
-        except Exception as e:
-            #print(f"Error computing path validity reward: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0.0
-
-    def _check_path_connectivity_binary(self, path_binary: np.ndarray,
-                                      start_mask: np.ndarray,
-                                      end_mask: np.ndarray) -> float:
-        """
-        检查从起点到终点的路径连通性（使用BFS算法）
-
-        Args:
-            path_binary: 二进制路径图像（1=路径，0=背景）
-            start_mask: 起点区域mask
-            end_mask: 终点区域mask
-
-        Returns:
-            连通性分数 (0-1)
-        """
-        try:
-            from collections import deque
-
-            # #print(f"    BFS连通性检查调试信息:")
-            # #print(f"      路径图像尺寸: {path_binary.shape}")
-            # #print(f"      路径像素总数: {np.sum(path_binary > 0)}")
-            # #print(f"      起点mask像素数: {np.sum(start_mask > 0)}")
-            # #print(f"      终点mask像素数: {np.sum(end_mask > 0)}")
-
-            # 获取起点和终点坐标
-            start_coords = np.where(start_mask > 0)
-            end_coords = np.where(end_mask > 0)
-
-            if len(start_coords[0]) == 0 or len(end_coords[0]) == 0:
-                # #print(f"      ✗ 起点或终点区域为空")
-                return 0.0
-
-            # 选择起点区域的中心点作为起始位置
-            start_y, start_x = int(np.mean(start_coords[0])), int(np.mean(start_coords[1]))
-            # #print(f"      起点中心坐标: ({start_y}, {start_x})")
-            # #print(f"      起点位置路径值: {path_binary[start_y, start_x]}")
-
-            # 检查起点是否在路径上
-            if path_binary[start_y, start_x] == 0:
-                # #print(f"      ⚠ 起点中心不在路径上，寻找最近的路径点")
-                # 在起点区域内寻找路径点
-                start_region_path = start_mask * path_binary
-                if np.sum(start_region_path) == 0:
-                    # #print(f"      ✗ 起点区域内没有路径像素")
-                    return 0.0
-                else:
-                    path_coords_in_start = np.where(start_region_path > 0)
-                    start_y, start_x = path_coords_in_start[0][0], path_coords_in_start[1][0]
-                    # #print(f"      使用起点区域内的路径点: ({start_y}, {start_x})")
-
-            # 创建终点区域的set用于快速查找，但只包含路径点
-            end_region_path = end_mask * path_binary
-            end_path_coords = np.where(end_region_path > 0)
-            end_points = set(zip(end_path_coords[0], end_path_coords[1]))
-            # #print(f"      终点区域包含 {len(end_points)} 个路径像素点（原始终点区域{np.sum(end_mask)}个像素）")
-
-            # 检查终点区域是否有路径点
-            end_path_pixels = np.sum(end_region_path)
-            # #print(f"      终点区域内路径像素数: {end_path_pixels}")
-
-            if end_path_pixels == 0:
-                # #print(f"      ✗ 终点区域内没有路径像素")
-                return 0.0
-
-            # 新策略：多起点并行BFS搜索（解决路径断裂问题）
-            # 1. 从膨胀后起点区域内的所有路径点开始搜索
-            start_region_path = start_mask * path_binary
-            start_path_coords = np.where(start_region_path > 0)
-            all_start_points = list(zip(start_path_coords[0], start_path_coords[1]))
-
-            # #print(f"      膨胀后起点区域内路径点总数: {len(all_start_points)}")
-            # #print(f"      膨胀后起点区域覆盖范围: y=[{np.min(start_path_coords[0])}, {np.max(start_path_coords[0])}], x=[{np.min(start_path_coords[1])}, {np.max(start_path_coords[1])}]")
-
-            # 新策略：如果单起点BFS覆盖率太低，使用多起点策略
-            # 分批启动多个起点进行BFS，提高覆盖率
-            max_start_points = min(8, len(all_start_points))  # 最多使用10个起点
-            # #print(f"      将使用多起点策略，最多{max_start_points}个起点")
-
-            # #print(f"      实现多起点BFS策略")
-
-            # 多起点BFS策略：从起点区域的多个路径点同时开始搜索
-            visited = set()
-            queue = deque()
-            directions = [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]  # 8方向
-            h, w = path_binary.shape
-
-            # 选择分散的多个起点
-            selected_start_points = []
-
-            # 策略1：选择高连通性起点
-            point_quality = []
-            for sy, sx in all_start_points:
-                neighbor_count = 0
-                for dy, dx in [(-1,0), (1,0), (0,-1), (0,1)]:
-                    ny, nx = sy + dy, sx + dx
-                    if 0 <= ny < h and 0 <= nx < w and path_binary[ny, nx] > 0:
-                        neighbor_count += 1
-                point_quality.append(((sy, sx), neighbor_count))
-
-            # 按连通性排序，选择前8个
-            point_quality.sort(key=lambda x: x[1], reverse=True)
-            selected_start_points = [point for point, _ in point_quality[:8]]
-
-            # #print(f"      选择{len(selected_start_points)}个高连通性起点进行多起点BFS")
-
-            # 将所有起点加入队列和visited集合
-            for start_point in selected_start_points:
-                queue.append(start_point)
-                visited.add(start_point)
-
-            # #print(f"      多起点BFS初始队列: {len(queue)}个起点，覆盖范围更广")
-
-            step_count = 0
-            max_steps = min(h * w, 200000)  # 增加步数限制
-
-            while queue and step_count < max_steps:
-                step_count += 1
-                y, x = queue.popleft()
-
-                # 检查是否到达终点区域
-                if (y, x) in end_points:
-                    #print(f"      ✓ 多起点BFS找到路径! 步数: {step_count}")
-                    #print(f"      到达终点: ({y}, {x})")
-                    # 成功时也保存一次可视化结果
-                    # try:
-                    #     visited_mask = np.zeros_like(path_binary)
-                    #     for vy, vx in visited:
-                    #         visited_mask[vy, vx] = 1
-
-                    #     debug_img = np.zeros((h, w, 3), dtype=np.uint8)
-                    #     debug_img[path_binary > 0] = [255, 255, 255]
-                    #     debug_img[visited_mask > 0] = [0, 255, 0]
-
-                    #     os.makedirs("test_images", exist_ok=True)
-                    #     Image.fromarray(debug_img).save("test_images/multi_start_bfs_result.png")
-                    #     #print(f"      已保存多起点BFS结果（成功版）: test_images/multi_start_bfs_result.png")
-                    # except Exception as e:
-                    #     #print(f"      保存BFS成功结果失败: {e}")
-                    return 1.0
-
-                # 搜索8个方向的邻居
-                for dy, dx in directions:
-                    ny, nx = y + dy, x + dx
-                    if (0 <= ny < h and 0 <= nx < w and
-                        (ny, nx) not in visited and
-                        path_binary[ny, nx] > 0):
-                        visited.add((ny, nx))
-                        queue.append((ny, nx))
-
-                # 输出进度
-                if step_count % 500 == 0:
-                    coverage = len(visited) / max(1, np.sum(path_binary > 0))
-                    # #print(f"      多起点BFS第{step_count}步: 队列{len(queue)}, 已访问{len(visited)}, 覆盖率{coverage:.1%}")
-
-            # #print(f"      多起点BFS完成: 步数{step_count}, 覆盖率{len(visited)/max(1, np.sum(path_binary > 0)):.1%}")
-
-        except Exception as e:
-            #print(f"  BFS连通性检查出错: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0.0
-
-
-    def _check_connectivity_with_random_point(self, inverted_result: np.ndarray,
-                                             expanded_start_mask: np.ndarray,
-                                             expanded_end_mask: np.ndarray,
-                                             reference_solution: torch.Tensor) -> float:
-        """
-        新的连通性检查策略：
-        1. 从reference_solution中提取真实的起点和终点位置
-        2. 在inverted_result中随机选择一个黑色点
-        3. 从该点BFS两次，找到连通组件的两个端点
-        4. 判断这两个端点是否分别位于起点和终点区域内
-
-        Args:
-            inverted_result: 反转后的路径图像（1=路径，0=背景）
-            expanded_start_mask: 膨胀后的起点区域
-            expanded_end_mask: 膨胀后的终点区域
-            reference_solution: 参考解图像，用于提取真实起终点位置
-
-        Returns:
-            连通性分数 (0-1)
-        """
-        try:
-            from collections import deque
-            import random
-
-            h, w = inverted_result.shape
-            directions = [(-1,0), (1,0), (0,-1), (0,1), (-1,-1), (-1,1), (1,-1), (1,1)]
-
-            # 0. 从reference_solution中提取真实的起点和终点位置
-            # #print(f"    从reference_solution提取真实起终点位置")
-            try:
-            #     # 调试：检查reference_solution的状态
-            #     #print(f"    reference_solution类型: {type(reference_solution)}")
-                if isinstance(reference_solution, torch.Tensor):
-            #         #print(f"    reference_solution tensor形状: {reference_solution.shape}")
-            #         #print(f"    reference_solution tensor设备: {reference_solution.device}")
-            #         #print(f"    reference_solution tensor数据类型: {reference_solution.dtype}")
-                    # 移动到CPU并转换为float32以便检查
-                    ref_sol_cpu = reference_solution.detach().float().cpu()
-                    # #print(f"    reference_solution值范围: [{ref_sol_cpu.min():.3f}, {ref_sol_cpu.max():.3f}]")
-                    # #print(f"    reference_solution是否全零: {(ref_sol_cpu == 0).all().item()}")
-                    
-                    # 如果值范围不在[0,1]，需要归一化
-                    if ref_sol_cpu.max() > 1.0:
-                        #print(f"    警告: reference_solution值范围超出[0,1]，需要归一化")
-                        ref_sol_cpu = ref_sol_cpu / 255.0
-                    
-                    # 确保形状是(C, H, W)
-                    if ref_sol_cpu.dim() == 4:
-                        ref_sol_cpu = ref_sol_cpu.squeeze(0)
-                    elif ref_sol_cpu.dim() == 2:
-                        ref_sol_cpu = ref_sol_cpu.unsqueeze(0)
-                    
-                    # 确保是3通道
-                    if ref_sol_cpu.shape[0] == 1:
-                        ref_sol_cpu = ref_sol_cpu.repeat(3, 1, 1)
-                    elif ref_sol_cpu.shape[0] != 3:
-                        print(f"    警告: reference_solution通道数异常: {ref_sol_cpu.shape}")
-                    
-                    reference_solution_for_extract = ref_sol_cpu
-                else:
-                    # 如果不是tensor，使用_convert_to_tensor转换
-                    reference_solution_for_extract = self._convert_to_tensor(reference_solution, target_size=(256, 256))
-                    # #print(f"    使用_convert_to_tensor转换后的形状: {reference_solution_for_extract.shape}")
-                
-
-                _, ref_start_mask, ref_end_mask = extract_red_markers(reference_solution_for_extract)
-                from scipy.ndimage import binary_dilation
-                structure = np.ones((3, 3), dtype=bool)
-                expanded_ref_start_mask = binary_dilation(ref_start_mask.astype(bool), structure=structure, iterations=5).astype(np.float32)
-                expanded_ref_end_mask = binary_dilation(ref_end_mask.astype(bool), structure=structure, iterations=5).astype(np.float32)
-
-                ref_start_pixels = np.sum(expanded_ref_start_mask)
-                ref_end_pixels = np.sum(expanded_ref_end_mask)
-                # #print(f"    参考起点像素数: {ref_start_pixels}")
-                # #print(f"    参考终点像素数: {ref_end_pixels}")
-
-                if ref_start_pixels == 0 or ref_end_pixels == 0:
-                    # #print(f"    ✗ 未在reference_solution中找到起点或终点")
-                    return 0.0
-            except Exception as e:
-                # #print(f"    ✗ 提取reference_solution起终点失败: {e}")
-                return 0.0
-
-            # 1. 找到所有黑色路径点
-            path_points = np.where(inverted_result > 0)
-            if len(path_points[0]) == 0:
-                # #print(f"    ✗ 没有找到路径点")
-                return 0.0
-
-            all_path_coords = list(zip(path_points[0], path_points[1]))
-#            #print(f"    总路径点数: {len(all_path_coords)}")
-
-            # 2. 随机选择一个路径点作为起始点
-            random_start = random.choice(all_path_coords)
-            # #print(f"    随机选择起始点: {random_start}")
-
-            # 3. 通过两次BFS找到连通组件的两个端点
-            # 第一次BFS：从随机点开始，找到最远的点作为第一个端点
-            def bfs_find_farthest(start_point, path_mask):
-                visited = set()
-                queue = deque([(start_point, 0)])  # (point, distance)
-                visited.add(start_point)
-                farthest_point = start_point
-                max_distance = 0
-
-                while queue:
-                    (y, x), dist = queue.popleft()
-                    if dist > max_distance:
-                        max_distance = dist
-                        farthest_point = (y, x)
-
-                    for dy, dx in directions:
-                        ny, nx = y + dy, x + dx
-                        if (0 <= ny < h and 0 <= nx < w and
-                            (ny, nx) not in visited and
-                            path_mask[ny, nx] > 0):
-                            visited.add((ny, nx))
-                            queue.append(((ny, nx), dist + 1))
-
-                return farthest_point, max_distance
-
-            # 第一次BFS：从随机点找到第一个端点
-            endpoint1, dist1 = bfs_find_farthest(random_start, inverted_result)
-            # #print(f"    第一次BFS: 从{random_start}找到端点1: {endpoint1}, 距离: {dist1}")
-
-            # 第二次BFS：从第一个端点找到第二个端点（连通组件的另一端）
-            endpoint2, dist2 = bfs_find_farthest(endpoint1, inverted_result)
-            # #print(f"    第二次BFS: 从{endpoint1}找到端点2: {endpoint2}, 距离: {dist2}")
-
-            if endpoint1 == endpoint2:
-                # #print(f"    ✗ 两个端点相同，连通组件可能太小")
-                return 0.0
-
-            # 4. 检查两个端点是否分别位于参考起点和终点区域
-            ep1_in_ref_start =expanded_ref_start_mask[endpoint1[0], endpoint1[1]] > 0
-            ep1_in_ref_end = expanded_ref_end_mask[endpoint1[0], endpoint1[1]] > 0
-            ep2_in_ref_start = expanded_ref_start_mask[endpoint2[0], endpoint2[1]] > 0
-            ep2_in_ref_end = expanded_ref_end_mask[endpoint2[0], endpoint2[1]] > 0
-
-            # #print(f"    端点1在参考起点区域: {ep1_in_ref_start}, 在参考终点区域: {ep1_in_ref_end}")
-            # #print(f"    端点2在参考起点区域: {ep2_in_ref_start}, 在参考终点区域: {ep2_in_ref_end}")
-
-            # 5. 判断是否有一个端点在起点，另一个在终点（顺序可颠倒）
-            if (ep1_in_ref_start and ep2_in_ref_end) or (ep1_in_ref_end and ep2_in_ref_start):
-                # #print(f"    ✓ 端点匹配成功，路径连通参考起终点，返回1")
-                return 1.0
-
-            # 6. 如果端点不匹配，使用指数衰减距离策略
-            # #print(f"    端点不匹配，使用距离衰减策略")
-
-            # 计算端点到参考起终点区域的最短距离
-            ref_start_coords = np.where(expanded_ref_start_mask > 0)
-            ref_end_coords = np.where(expanded_ref_end_mask > 0)
-
-            if len(ref_start_coords[0]) == 0 or len(ref_end_coords[0]) == 0:
-                return 0.0
-
-            from scipy.spatial.distance import cdist
-
-            # 计算两个端点到参考起终点区域的最短距离
-            endpoints = np.array([endpoint1, endpoint2])
-            ref_start_points = np.array(list(zip(ref_start_coords[0], ref_start_coords[1])))
-            ref_end_points = np.array(list(zip(ref_end_coords[0], ref_end_coords[1])))
-
-            # 端点到参考起点区域的距离
-            dist_ep1_to_start = np.min(cdist([endpoint1], ref_start_points))
-            dist_ep2_to_end = np.min(cdist([endpoint2], ref_end_points))
-            # 端点到参考终点区域的距离
-            dist_ep1_to_end = np.min(cdist([endpoint1], ref_end_points))
-            dist_ep2_to_start = np.min(cdist([endpoint2], ref_start_points))
-
-            # 距离分配：离起点最近端点算起点距离，离终点最近端点算终点距离
-            min_start_dist = min(dist_ep1_to_start, dist_ep2_to_start)
-            min_end_dist = min(dist_ep1_to_end, dist_ep2_to_end)
-
-            # 距离得分各自指数衰减，最后加权平均
-            start_score = max(0.0, np.exp(-min_start_dist/10))
-            end_score = max(0.0, np.exp(-min_end_dist/10))
-            distance_score = 0.5 * start_score + 0.5 * end_score
-
-            # #print(f"    端点到起点最短距离: {min_start_dist:.2f}, 到终点最短距离: {min_end_dist:.2f}")
-            # #print(f"    第二个reward: avg={distance_score:.3f}")
-            return distance_score
-
-        except Exception as e:
-            # #print(f"    随机点连通性检查出错: {e}")
-            import traceback
-            traceback.print_exc()
-            return 0.0
-
     def _decode_cell_map(self, cell_map_input: Union[torch.Tensor, np.ndarray, Image.Image]) -> np.ndarray:
         """
-        解码cell map图像，将编码的RGB值转换为cell ID。
+        Decode cell map image, convert encoded RGB values to cell ID.
         
-        与 visualize_cell_map.py 中的解码方式一致。
-        JavaScript保存时使用BGR顺序写入buffer，但PNG文件格式是RGB。
-        OpenCV读取：BGR格式 -> id = R | (G << 8) | (B << 16)，其中 R=[:,:,2], G=[:,:,1], B=[:,:,0]
-        PIL读取：RGB格式，但需要按OpenCV的方式解码（因为原始数据是BGR顺序）
+        When saving in JavaScript, BGR order is used, but the PNG file format is RGB.
+        OpenCV read: BGR format -> id = R | (G << 8) | (B << 16), where R=[:,:,2], G=[:,:,1], B=[:,:,0]
+        PIL read: RGB format, but needs to be decoded in the way of OpenCV (because the original data is BGR order)
 
         Args:
-            cell_map_input: Cell map图像 (PIL Image, numpy array HWC, 或 torch Tensor CHW)
+            cell_map_input: Cell map image (PIL Image, numpy array HWC, or torch Tensor CHW)
 
         Returns:
-            Cell ID数组 (H, W)，每个像素对应一个cell ID
+            Cell ID array (H, W), each pixel corresponds to a cell ID
         """
         try:
             # 转换为numpy数组 HWC格式
@@ -1253,17 +614,17 @@ class MazeRewardFunction:
                                        reference_solution: Union[str, Image.Image, torch.Tensor] = None,
                                        sample_index: int = 0) -> float:
         """
-        第三个reward：使用BFS遍历生成的路径，计算经过的GT cell数量占比。
+        Metric 2: Traverse the generated path, calculate the percentage of GT cells passed.
 
         Args:
-            generated_image: 模型输出的生成图像 (C, H, W)
-            cell_map: 格子分割图（BGR格式），每个像素的RGB值编码了cell ID
-            metadata_json: 元数据JSON字符串，包含path_cell_ids（GT路径经过的cell列表）
-            solution_mask: 解空间mask PNG（255=解空间，0=其他），必须提供
-            reference_solution: 参考解图像，用于提取起终点位置（可选）
+            generated_image: Generated image (C, H, W)
+            cell_map: Cell map image (BGR format), each pixel's RGB value encodes the cell ID
+            metadata_json: Metadata JSON string, contains path_cell_ids (GT path cells)
+            solution_mask: Solution space mask PNG (255=solution space, 0=other), must be provided
+            reference_solution: Reference solution image, for extracting start and end positions (optional)
 
         Returns:
-            GT cell覆盖率 (0-1, higher is better)
+            GT cell coverage (0-1, higher is better)
         """
         if solution_mask is None:
             print("  错误: solution_mask必须提供")
@@ -1289,7 +650,7 @@ class MazeRewardFunction:
 
             # 2. 解码cell_map
             # cell_ids_array = cell_map_tensor = self._convert_to_tensor(cell_map)
-            if IS_ISCIRCLE: 
+            if IS_CIRCLE: 
                 cell_ids_array = self._decode_cell_map(cell_map)
             else:
                 cell_ids_array = cell_map_tensor = self._convert_to_tensor(cell_map)
@@ -1402,18 +763,17 @@ class MazeRewardFunction:
                                  original_img: Union[str, Image.Image, torch.Tensor],
                                  target_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
         """
-        参考download.py中的pil_image_mask_multiply实现
-        使用sol_img, mask_img, original_img进行mask相乘操作
+        Multiply sol_img, mask_img, original_img using mask operation
         
         Args:
-            sol_img: 解图像（对应download.py中的img_path）
-            mask_img: 掩码图像（对应download.py中的mask_path）
-            original_img: 原始图像（对应download.py中的mask_boundary_path）
-            target_size: 目标尺寸 (height, width)
+            sol_img: Solution image (corresponding to img_path in download.py)
+            mask_img: Mask image (corresponding to mask_path in download.py)
+            original_img: Original image (corresponding to mask_boundary_path in download.py)
+            target_size: Target size (height, width)
             
         Returns:
-            处理后的图像数组 (H, W, 3)，值范围[0, 255]
-            结果中：解空间区域是全黑色，非解空间区域是白色/带路径的白色
+            Processed image array (H, W, 3), value range [0, 255]
+            In the result, the solution space is completely black, and the non-solution space is white/white with path
         """
         # 1. 转换所有图像为PIL格式并调整尺寸
         if isinstance(sol_img, str):
@@ -1498,26 +858,19 @@ class MazeRewardFunction:
                                            original_img: Union[str, Image.Image, torch.Tensor] = None,
                                            sample_index: int = 0) -> float:
         """
-        第四个reward：使用generated_image, solution_mask, original_img进行mask相乘，计算路径在非解空间区域格子的占比。
-
-        步骤：
-        1. 使用pil_image_mask_multiply逻辑处理generated_image, solution_mask, original_img
-        2. 在结果图像中，解空间区域是全黑色，非解空间区域是白色/带路径的白色
-        3. 提取非解空间区域的路径（白色部分）
-        4. 匹配到对应的cell map id
-        5. 计算路径在非解空间区域格子的占比
+        Metric 3: Multiply generated_image, solution_mask, original_img using mask operation, calculate the percentage of path in the non-solution space region.
 
         Args:
-            generated_image: 模型输出的生成图像 (C, H, W)，用于mask相乘
-            cell_map: 格子分割图（BGR格式），每个像素的RGB值编码了cell ID CHW
-            metadata_json: 元数据JSON字符串，包含path_cell_ids（GT路径经过的cell列表）
-            solution_mask: 解空间mask PNG（255=解空间，0=其他），对应mask_img
-            sol_img: 解图像（未使用，保留接口兼容性）
-            original_img: 原始图像（对应download.py中的mask_boundary_path）
-            sample_index: 样本索引，用于保存调试图像
+            generated_image: Generated image (C, H, W), used for mask multiplication
+            cell_map: Cell map image (BGR format), each pixel's RGB value encodes the cell ID CHW
+            metadata_json: Metadata JSON string, contains path_cell_ids (GT path cells)
+            solution_mask: Solution space mask PNG (255=solution space, 0=other), corresponding to mask_img
+            sol_img: Solution image (not used, for interface compatibility)
+            original_img: Original image (corresponding to mask_boundary_path in download.py)
+            sample_index: Sample index, used for saving debug images
 
         Returns:
-            背景违规比例 (0-1, lower is better，所以会用-1权重)
+            Background violation ratio (0-1, lower is better, so will use -1 weight)
         """
         if solution_mask is None or original_img is None:
             print("  错误: solution_mask和original_img都必须提供")
@@ -1707,7 +1060,6 @@ class MazeRewardFunction:
         mse_solution_scores = np.zeros(batch_size)  # 直接和sol_img做MSE的指标
 
         white_region_overlap_rewards = np.zeros(batch_size)  # Rule 2: White region preservation
-        path_quality_rewards = np.zeros(batch_size)
         gt_cell_coverage_rewards = np.zeros(batch_size)  # 第三个reward: GT cell coverage
         background_violation_rewards = np.zeros(batch_size)  # 第四个reward: Background violation
 
@@ -1760,22 +1112,12 @@ class MazeRewardFunction:
                 if solution_mask is None:
                     raise ValueError(f"solution_mask for sample {i} is None! Check metadata['mask_img'] or metadata['solution_mask']")
 
-                # print("solution_ref shape: ", solution_ref.size)
-                # print("ori_image shape: ", ori_image.size)
-                # print("maze_ref shape: ", maze_ref.size) #WH
-                # print("solution_mask shape: ", solution_mask.size)
-                # print("single_image shape: ", single_image.shape)
-                # input()
 
                 solution_ref = solution_ref.resize((target_size[1], target_size[0]), Image.BILINEAR)
                 ori_image = ori_image.resize((target_size[1], target_size[0]), Image.BILINEAR) # HWC
                 maze_ref = maze_ref.resize((target_size[1], target_size[0]), Image.BILINEAR)
                 solution_mask = solution_mask.resize((target_size[1], target_size[0]), Image.BILINEAR) #HWC
-                # print("solution_ref shape: ", solution_ref.size) 
-                # print("ori_image shape: ", ori_image.size)
-                # print("maze_ref shape: ", maze_ref.size)
-                # print("solution_mask shape: ", solution_mask.size)
-                # input()
+
 
                 ori_image_tensor = torch.tensor(np.array(ori_image))#self._convert_to_tensor(ori_image)
                 maze_ref_tensor = torch.tensor(np.array(maze_ref))#self._convert_to_tensor(maze_ref)
@@ -1800,15 +1142,11 @@ class MazeRewardFunction:
                 sing_img = torch.tensor(sing_img.transpose(2, 0,1))  # HWC -> CHW
                 # print("1.", sing_img.shape)
                 Image.fromarray(sing_img.numpy().transpose(1, 2, 0).astype(np.uint8)).save("sing_img.jpg")
-                # --- 修改开始：调用第一个 reward 接收两个返回值 ---
+
                 mse_in, mse_out = self.compute_solution_space_reward(
                     sing_img, ori_image_tensor, solution_ref_tensor, solution_mask
                 )
-                print(f"第一个reward：{mse_in}, {mse_out}")
-                # input()
-                
-                # 第二个reward：使用mask来提取IC和解图像来提取起终点，可选的原始图像检查黑色区域
-                path_reward = 0#self.compute_path_quality_reward(single_image, solution_ref_tensor, ori_image_tensor, solution_mask)
+
         
                 # 第三个reward：计算GT cell覆盖率
                 cell_coverage_reward = 0.0
@@ -1886,7 +1224,7 @@ class MazeRewardFunction:
                 mse_solution = F.mse_loss(sing_img_normalized, solution_ref_chw).item()
                 mse_solution_scores[i] = mse_solution
 
-                path_quality_rewards[i] = path_reward
+
                 gt_cell_coverage_rewards[i] = cell_coverage_reward
                 background_violation_rewards[i] = background_violation_reward
 
@@ -1894,14 +1232,13 @@ class MazeRewardFunction:
                 print(f"Error processing sample {i}: {e}")
                 # Set default rewards for failed samples
                 white_region_overlap_rewards[i] = 0.0
-                path_quality_rewards[i] = 0.0
+
                 gt_cell_coverage_rewards[i] = 0.0
                 background_violation_rewards[i] = 0.0
                 mse_solution_scores[i] = 0.0
 
         # Compute combined reward
         combined_rewards = (self.weights['solution_space'] * white_region_overlap_rewards +
-                          self.weights['path_quality'] * path_quality_rewards +
                           self.weights['gt_cell_coverage'] * gt_cell_coverage_rewards +
                           self.weights['background_violation'] * background_violation_rewards)
         gt_and_bg_reward = (mse_inside_scores * self.weights['solution_space'] + mse_outside_scores * self.weights['solution_space'] + self.weights['gt_cell_coverage'] * gt_cell_coverage_rewards +
@@ -1914,7 +1251,6 @@ class MazeRewardFunction:
             'mse_inside': mse_inside_scores,   # 返回原始 MSE Inside
             'mse_outside': mse_outside_scores, # 返回原始 MSE Outside
             'mse_solution': mse_solution_scores,  # 直接和sol_img做MSE的指标
-            'path_validity': path_quality_rewards,  # 第二个reward: path validity
             'gt_cell_coverage': gt_cell_coverage_rewards,  # 第三个reward: GT cell coverage
             'background_violation': background_violation_rewards  # 第四个reward: Background violation
         }
@@ -1925,7 +1261,6 @@ class MazeRewardFunction:
             'mean_mse_inside': np.mean(mse_inside_scores),    # Log mean MSE Inside
             'mean_mse_outside': np.mean(mse_outside_scores),  # Log mean MSE Outside
             'mean_mse_solution': np.mean(mse_solution_scores),  # Log mean MSE with solution image
-            'mean_path_validity': np.mean(path_quality_rewards),  # 第二个reward
             'mean_gt_cell_coverage': np.mean(gt_cell_coverage_rewards),  # 第三个reward
             'mean_background_violation': np.mean(background_violation_rewards),  # 第四个reward
             'mean_combined': np.mean(combined_rewards)
@@ -1950,9 +1285,8 @@ def create_maze_reward_function(config=None):
     # Default weights
     weights = {
         'solution_space': -1.0,
-        'path_quality': 0.0,
-        'gt_cell_coverage': 1.0,         # 第三个reward: GT cell coverage (权重1)
-        'background_violation': -1.0     # 第四个reward: Background violation (权重-1，惩罚违规)
+        'gt_cell_coverage': 1.0,        
+        'background_violation': -1.0     
     }
 
     if config and hasattr(config, 'reward_weights'):
