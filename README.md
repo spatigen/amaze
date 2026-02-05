@@ -1,6 +1,7 @@
 <h1 align="center"> Amaze: <br>Using Image Editing Models for Visual Planning </h1>
 <div align="center">
-  <a href='https://huggingface.co/datasets/piekenius123/Amaze'><img src='https://img.shields.io/badge/Benchmark-blue?logo=huggingface'></a> &nbsp; 
+  <a href='https://huggingface.co/datasets/piekenius123/Amaze'><img src='https://img.shields.io/badge/Benchmark-blue?logo=huggingface'></a>&nbsp;&nbsp;
+  <a href='https://spatigen.github.io/amaze.io/'><img src='https://img.shields.io/badge/Project_Page-green?logo=github-pages&logoColor=white'></a>
 </div>
 
 # Amaze
@@ -8,10 +9,10 @@
 This repository contains the codebase for fine-tuning, inferring, and evaluating image editing models on the **Amaze Bench**. It supports Supervised Fine-Tuning (SFT) and specialized evaluation metrics for maze-solving tasks.
 
 <div align="center">
-  <img src="assets/circle.jpg" width="24%" alt="Circle Maze" />
-  <img src="assets/hexagon.jpg" width="24%" alt="Hexagon Maze" />
+  <img src="assets/circle.png" width="24%" alt="Circle Maze" />
+  <img src="assets/hexagon.png" width="24%" alt="Hexagon Maze" />
   <img src="assets/square.jpg" width="24%" alt="Square Maze" />
-  <img src="assets/triangle.jpg" width="24%" alt="Triangle Maze" />
+  <img src="assets/triangle.png" width="24%" alt="Triangle Maze" />
 </div>
 
 ## 🚀 Supported Models
